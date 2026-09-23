@@ -1,30 +1,57 @@
 # Ludus
 
-Secure narrative-generation backend for the Ludus app. The OpenAI key is used only on the server and must never be placed in Flutter, source control, or a built client.
+Ludus is built on the PeaceGPT-compatible architecture from [ITAGGROECONOMICS](https://github.com/davidjmercedesr-hub/ITAGGROECONOMICS): an offline/local-first client boundary with a trusted backend AI adapter. The client never receives provider credentials.
 
-## Local backend
+## Architecture
+
+```text
+Flutter / React / Capacitor client
+        │  HTTPS: /api/assistant or /narrative
+        ▼
+Ludus Node backend
+        │  GWDG OpenAI-compatible gateway + Arcana context
+        ▼
+GWDG AI / RAG provider
+```
+
+The backend uses the GWDG Arcana adapter by default and supports the same provider settings as the source project:
+
+- `GWDG_API_KEY`
+- `GWDG_ARCANA_ID`
+- `GWDG_BASE_URL`
+- `GWDG_MODEL`
+
+## Local run
 
 ```bash
 cd backend
 cp .env.example .env
-# Set OPENAI_API_KEY in .env (never commit it)
+# Set secrets in .env or your shell; never commit .env
 npm install
 npm start
 ```
 
-Verify the service:
+Check the service:
 
 ```bash
 curl http://localhost:3000/health
-curl -X POST http://localhost:3000/narrative \
+curl -X POST http://localhost:3000/api/assistant \
   -H 'Content-Type: application/json' \
-  -d '{"role":"Warrior"}'
+  -d '{"message":"Describe a peaceful opening scene","contextPack":{}}'
 ```
 
-Run tests with `npm test`. The narrative endpoint returns `503` when the provider secret is not configured, rather than exposing or accepting a client-side key.
+`POST /narrative` remains available for the original Ludus client contract and maps a `role` into an assistant request.
 
-## Deploying
+## Fly.io
 
-This repository includes a `Dockerfile` and `render.yaml`. Configure `OPENAI_API_KEY` and `ALLOWED_ORIGINS` as production secrets/environment variables in the hosting provider. Do not put them in GitHub, Flutter `--dart-define`, or the image source. After deployment, check `/health` and then make a real narrative request.
+Fly terminates public HTTPS, so the container serves plain HTTP on port 3000. Set secrets with Fly rather than committing them:
 
-If a key was previously exposed, revoke it before creating the production secret.
+```bash
+fly secrets set GWDG_API_KEY='YOUR_KEY' GWDG_ARCANA_ID='YOUR_ARCANA_ID' \
+  GWDG_BASE_URL='https://chat-ai.academiccloud.de/v1' \
+  GWDG_MODEL='qwen3-30b-a3b-instruct-2507' \
+  ALLOWED_ORIGINS='https://YOUR-FRONTEND-ORIGIN'
+fly deploy
+```
+
+Revoke any previously exposed credential before setting its replacement. Do not place provider keys in Flutter, `--dart-define`, or the built app.

@@ -1,7 +1,7 @@
 import http from 'node:http';
+import { askGwdg, hasGwdgConfig } from './providers/gwdg.js';
 
 const port = Number(process.env.PORT || 3000);
-const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '*').split(',').map((value) => value.trim());
 
 function setCors(response, request) {
@@ -14,7 +14,7 @@ function setCors(response, request) {
 }
 
 function sendJson(response, status, body) {
-  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   response.end(JSON.stringify(body));
 }
 
@@ -27,53 +27,30 @@ async function readBody(request) {
   return data ? JSON.parse(data) : {};
 }
 
-async function createNarrative(role) {
-  if (!process.env.OPENAI_API_KEY) {
-    const error = new Error('OPENAI_API_KEY is not configured');
-    error.statusCode = 503;
-    throw error;
-  }
-  const apiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: 'You are a concise fantasy game narrator. Return an immersive narrative of 2-4 paragraphs.' },
-        { role: 'user', content: `Create a narrative for a ${role} character.` }
-      ],
-      temperature: 0.8
-    })
-  });
-  if (!apiResponse.ok) {
-    const error = new Error(`Narrative provider returned ${apiResponse.status}`);
-    error.statusCode = apiResponse.status >= 500 ? 502 : 400;
-    throw error;
-  }
-  const data = await apiResponse.json();
-  return data.choices?.[0]?.message?.content?.trim() || '';
-}
-
 export const server = http.createServer(async (request, response) => {
   setCors(response, request);
   if (request.method === 'OPTIONS') return response.writeHead(204).end();
   try {
     const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
-    if (request.method === 'GET' && url.pathname === '/health') return sendJson(response, 200, { status: 'ok' });
-    if (request.method === 'POST' && url.pathname === '/narrative') {
+    if (request.method === 'GET' && url.pathname === '/health') {
+      return sendJson(response, 200, { status: 'ok', provider: 'gwdg-arcana', configured: hasGwdgConfig() });
+    }
+    if (request.method === 'POST' && (url.pathname === '/api/assistant' || url.pathname === '/narrative')) {
+      if (!hasGwdgConfig()) return sendJson(response, 503, { error: 'GWDG server configuration is missing.' });
       const body = await readBody(request);
-      const role = typeof body.role === 'string' ? body.role.trim() : '';
-      if (!role || role.length > 80) return sendJson(response, 400, { error: 'role must be a non-empty string of 80 characters or fewer' });
-      const narrative = await createNarrative(role);
-      return sendJson(response, 200, { narrative });
+      const message = url.pathname === '/narrative'
+        ? `Create an immersive narrative for a ${typeof body.role === 'string' ? body.role.trim() : ''} character.`
+        : body.message;
+      if (typeof message !== 'string' || !message.trim() || message.length > 1000) {
+        return sendJson(response, 400, { error: 'message is required and must be 1000 characters or fewer.' });
+      }
+      const result = await askGwdg({ message: message.trim(), contextPack: body.contextPack });
+      return sendJson(response, 200, url.pathname === '/narrative' ? { narrative: result.text } : result);
     }
     sendJson(response, 404, { error: 'Not found' });
   } catch (error) {
-    const status = error.statusCode || (error instanceof SyntaxError ? 400 : 500);
-    sendJson(response, status, { error: status === 500 ? 'Internal server error' : error.message });
+    const status = error.statusCode || (error instanceof SyntaxError ? 400 : 502);
+    sendJson(response, status, { error: status === 502 ? 'AI provider request failed.' : error.message });
   }
 });
 

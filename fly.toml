@@ -6,7 +6,8 @@ primary_region = "iad"
 
 [env]
   NODE_ENV = "production"
-  OPENAI_MODEL = "gpt-4o-mini"
+  PORT = "3000"
+  GWDG_MODEL = "qwen3-30b-a3b-instruct-2507"
 
 [http_service]
   internal_port = 3000
